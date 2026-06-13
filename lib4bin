@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 shopt -s extglob
 
-# deps: apt update && apt install bash file binutils patchelf findutils grep sed coreutils strace -y
-# deps: apk add bash file binutils patchelf findutils grep sed coreutils strace
-# deps: dnf install bash file binutils patchelf findutils grep sed coreutils strace -y
-# deps: pacman -Sy bash file binutils patchelf findutils grep sed coreutils strace --noconfirm
-# deps: xbps-install -Sy bash file binutils patchelf findutils grep sed coreutils strace
+# deps: apt update && apt install bash binutils patchelf findutils grep sed coreutils strace -y
+# deps: apk add bash binutils patchelf findutils grep sed coreutils strace
+# deps: dnf install bash binutils patchelf findutils grep sed coreutils strace -y
+# deps: pacman -Sy bash binutils patchelf findutils grep sed coreutils strace --noconfirm
+# deps: xbps-install -Sy bash binutils patchelf findutils grep sed coreutils strace
 
 RED='\033[1;91m'
 BLUE='\033[1;94m'
@@ -116,7 +116,7 @@ usage() {
     -s, --strip              Strip binaries and libraries (env: STRIP=1)
     -v, --verbose            Verbose mode (env: VERBOSE=1)
     -w, --with-sharun        Pack sharun from PATH or env or download
-                                (env: WITH_SHARUN=1, SHARUN=/path|URL, SHARUN_URL=URL, UPX_SHARUN=1)
+                                 (env: WITH_SHARUN=1, SHARUN=/path|URL, SHARUN_URL=URL)
     -o, --with-wrappe        Pack with wrappe from PATH or env or download
                                 (env: WITH_WRAPPE=1, WRAPPE=/path|URL, WRAPPE_URL=URL)
     -c, --wrappe-clvl 0-22   Specify the compression level for wrappe (env: WRAPPE_CLVL=0-22) (default: 8)
@@ -160,7 +160,7 @@ is_exe_exist() { which_exe "$@" &>/dev/null ; }
 
 check_deps() {
     local ret=0
-    local binaries=(file patchelf find grep sed)
+    local binaries=(patchelf find grep sed)
     [ "$STRIP" != 1 ]||binaries+=(strip)
     [ "$STRACE_MODE" != 1 ]||binaries+=(strace)
     for bin in "${binaries[@]}"
@@ -173,7 +173,7 @@ check_deps() {
     done
     if [ "$ret" != 0 ]
         then
-            info_msg "You need to install ${BLUE}lib4bin${GREEN} dependencies: ${BLUE}file binutils patchelf findutils grep sed coreutils strace"
+            info_msg "You need to install ${BLUE}lib4bin${GREEN} dependencies: ${BLUE}binutils patchelf findutils grep sed coreutils strace"
             exit 1
     fi
 }
@@ -710,14 +710,30 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                             dst_dir_pth="${dst_dir_pth}.dir"
                         DST_DIRS["$dst_dir_pth"]=
                         bin_dir_pth="${dst_dir_pth}/bin"
-                        FILE_INFO="$(file "$binary_src_pth" 2>/dev/null|cut -d':' -f2-)"
-                        IS_ELF="$(grep -o 'ELF'<<<"$FILE_INFO")"
-                        IS_STATIC="$(grep -o 'static'<<<"$FILE_INFO")"
-                        IS_SCRIPT="$(grep -o 'script'<<<"$FILE_INFO")"
-                        IS_ELF32="$(grep -o 'ELF 32-bit'<<<"$FILE_INFO")"
-                        IS_SO="$(grep -o 'shared object'<<<"$FILE_INFO")"
-                        IS_EXECUTABLE="$(grep -o 'executable'<<<"$FILE_INFO")"
-                        IS_EXECUTABLE="${IS_EXECUTABLE:=$(([ -n "$IS_SO" ] && ! is_so) && echo executable)}"
+                        unset IS_ELF IS_STATIC IS_SCRIPT IS_ELF32 IS_SO IS_EXECUTABLE
+                        if head -c 4 "$binary_src_pth" 2>/dev/null | grep -qa 'ELF'; then
+                            IS_ELF="ELF"
+                            # ELF class byte at offset 4: 1=32-bit, 2=64-bit
+                            head -c 5 "$binary_src_pth" 2>/dev/null | tail -c 1 | grep -qa $'\x01' && IS_ELF32="ELF 32-bit"
+                            case "$binary_name" in
+                                *.so|*.so.*) IS_SO="shared object" ;;
+                            esac
+                            if [ -z "$IS_SO" ]; then
+                                if [ -x "$binary_src_pth" ]; then
+                                    IS_EXECUTABLE="executable"
+                                    ldd "$binary_src_pth" &>/dev/null || IS_STATIC="static"
+                                elif ldd "$binary_src_pth" &>/dev/null; then
+                                    IS_SO="shared object"
+                                else
+                                    IS_EXECUTABLE="executable"
+                                    IS_STATIC="static"
+                                fi
+                            fi
+                        else
+                            if [ "$(head -c 2 "$binary_src_pth" 2>/dev/null)" = '#!' ]; then
+                                IS_SCRIPT="script"
+                            fi
+                        fi
                         IS_SHARUN="$(find "$binary_src_pth" -xdev -samefile "${dst_dir}/sharun" 2>/dev/null)"
                         info_msg "$YELLOW[ $binary_number ]: $BLUE[$binary_name] ${GREEN}..."
                         if [ "$HARD_LINKS" == 1 ] && [[ -n "$IS_SCRIPT" || -n "$IS_STATIC" ]]
@@ -736,7 +752,6 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                 is_so && LIBS="$(echo -e "$LIBS\n$binary"|sort -u|sed '/^$/d')"
                                 if [[ -n "$LIBS" && -z "$IS_SCRIPT" && -z "$IS_STATIC" ]]
                                     then
-                                        INTERPRETER="$(basename "$(grep -Em1 'ld-(linux|musl).*\.so'<<<"$LIBS"|cut -d'=' -f1|sed 's|\t||')")"
                                         [[ "$create_links" == 1 && "$hard_links" == 1 && ! -x "${dst_dir}/sharun" ]] && \
                                             with_sharun=1
                                     else
@@ -750,7 +765,7 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                             then
                                                 if [[ "$with_sharun" == 1 && ! -x "${dst_dir}/sharun" ]]
                                                     then
-                                                        TMP_SHARUN="${TMPDIR}/sharun-${ARCH}$([ "$UPX_SHARUN" != 1 ]||echo -upx)"
+                                                        TMP_SHARUN="${TMPDIR}/sharun-${ARCH}"
                                                         SHARUN="${SHARUN:="$(readlink -f "$(which_exe sharun)")"}"
                                                         SHARUN="${SHARUN:="$TMP_SHARUN"}"
                                                         if [ ! -x "$SHARUN" ]
@@ -760,7 +775,7 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                                                         SHARUN_URL="$SHARUN"
                                                                         SHARUN="$TMP_SHARUN"
                                                                 fi
-                                                                SHARUN_URL="${SHARUN_URL:=${GIT_SHARUN_RELEASE}$([ "$UPX_SHARUN" != 1 ]||echo -upx)}"
+                                                                SHARUN_URL="${SHARUN_URL:=${GIT_SHARUN_RELEASE}}"
                                                                 info_msg "Downloading sharun -> '$SHARUN'..."
                                                                 info_msg "$SHARUN_URL"
                                                                 if try_dl "$SHARUN_URL" "$SHARUN"
@@ -851,18 +866,22 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                     do
                                         if [[ "${LIBRARIES["$lib_src_pth"]}" != 1 ]]
                                             then
-                                                unset lib_src_real_pth lib_src_real_name
+                                                unset lib_src_real_pth lib_src_real_name IS_SHARED_OBJ
                                                 if [ -L "$lib_src_pth" ]
                                                     then
                                                         lib_src_real_pth="$(readlink -f "$lib_src_pth")"
                                                         lib_src_real_name="$(basename "$lib_src_real_pth")"
                                                         lib_src_dirname_pth="$(readlink -f "$(dirname "$lib_src_real_pth")")"
-                                                        FILE_INFO="$(file "$lib_src_real_pth" 2>/dev/null)"
+                                                        if head -c 4 "$lib_src_real_pth" 2>/dev/null | grep -qa 'ELF' && ldd "$lib_src_real_pth" &>/dev/null; then
+                                                            IS_SHARED_OBJ=1
+                                                        fi
                                                     else
                                                         lib_src_dirname_pth="$(readlink -f "$(dirname "$lib_src_pth")")"
-                                                        FILE_INFO="$(file "$lib_src_pth" 2>/dev/null)"
+                                                        if head -c 4 "$lib_src_pth" 2>/dev/null | grep -qa 'ELF' && ldd "$lib_src_pth" &>/dev/null; then
+                                                            IS_SHARED_OBJ=1
+                                                        fi
                                                 fi
-                                                if [[ "$FILE_INFO" =~ 'shared object' ]]
+                                                if [ -n "$IS_SHARED_OBJ" ]
                                                     then
                                                         lib_src_name="$(basename "$lib_src_pth")"
                                                         grep -qE '/lib32|/i386-linux-gnu|/arm-linux-gnu'<<<"$lib_src_dirname_pth" && \
@@ -889,18 +908,12 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                                         try_cp_exe "$lib_src_pth" "$lib_dst_pth"
                                                         if [[ -n "$lib_src_real_name" && "$lib_src_name" != "$lib_src_real_name" ]]
                                                             then
-                                                                lib_src_rel_pth="$(readlink "$lib_src_pth")"
-                                                                (if [[ "$(dirname "$lib_src_rel_pth")" =~ ^\. ]]
-                                                                    then
-                                                                        lib_dst_dir_rel_pth="$(get_lib_dst_dir_pth "$dst_dir_pth" "$lib_dir" \
-                                                                            "$(readlink -f "$(dirname "$lib_src_pth")")")"
-                                                                        try_mkdir "$lib_dst_dir_rel_pth"
-                                                                        try_cd "$lib_dst_dir_rel_pth"
-                                                                        try_ln "$lib_src_rel_pth" "$lib_src_name"
-                                                                    else
-                                                                        try_cd "$lib_dst_dir_pth"
-                                                                        try_ln "$lib_src_real_name" "$lib_src_name"
-                                                                fi)||exit 1
+                                                                _sym_dst_dir="$(get_lib_dst_dir_pth "$dst_dir_pth" "$lib_dir" "$(readlink -f "$(dirname "$lib_src_pth")")")"
+                                                                _sym_rel="$(get_relative_path "$_sym_dst_dir" "$lib_dst_dir_pth")"
+                                                                [ -z "$_sym_rel" ] && _sym_rel="."
+                                                                (try_mkdir "$_sym_dst_dir"
+                                                                try_cd "$_sym_dst_dir"
+                                                                try_ln "$_sym_rel/$lib_src_real_name" "$lib_src_name")||exit 1
 
                                                         fi
                                                         if [[ "${LIBRARIES["$lib_dst_pth"]}" != 1 ]]
@@ -1159,19 +1172,6 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                                                                         "[Paths]\nPrefix = ../shared/${lib_dir}/${qt}\nPlugins = plugins\nImports = qml\nQml2Imports = qml" \
                                                                                         > "$qt_conf"
                                                                                 fi ;;
-                                                                            */libmagic.so*)
-                                                                                dst_magic_file="$dst_dir/share/file/misc/magic.mgc"
-                                                                                for magic_file_dir in 'file' 'file/misc' 'misc'
-                                                                                    do
-                                                                                        sys_magic_file="$(readlink -f "/usr/share/$magic_file_dir/magic.mgc")"
-                                                                                        if [[ -f "$sys_magic_file" && ! -f "$dst_magic_file" ]]
-                                                                                            then
-                                                                                                hook_msg "copy magic file..."
-                                                                                                try_mkdir "$(dirname "$dst_magic_file")"
-                                                                                                try_cp "$sys_magic_file" "$dst_magic_file"
-                                                                                                break
-                                                                                        fi
-                                                                                done ;;
                                                                             */libgirepository-*.so*)
                                                                                 girepository="$(grep -o 'girepository-.*\.so'<<<"$lib_src_name"|sed "s|\.so$||")"
                                                                                 sys_girepository="${lib_src_dirname_pth}/$girepository"
@@ -1229,34 +1229,6 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                                 LIBRARIES["$lib_src_pth"]=1
                                         fi
                                 done
-                                if [ -n "$INTERPRETER" ]
-                                    then
-                                        interpreter_pth="${dst_dir}/shared/$lib_dir/$INTERPRETER"
-                                        if [[ "$patch_interpreter" == 1 && "${LIBRARIES["${INTERPRETER}_patched"]}" != 1 ]]
-                                            then
-                                                if [ "$LIBS_ONLY" != 1 ] && ! is_so
-                                                    then
-                                                        (try_cd "$bin_dir_pth"
-                                                        if [ -f "../$lib_dir/$INTERPRETER" ]
-                                                            then
-                                                                if [ -n "$IS_PYINSTELF" ]
-                                                                    then new_interp="$(printf "%${MAX_INTERP_LEN}s"|tr ' ' "i")"
-                                                                    else new_interp="../$lib_dir/$INTERPRETER"
-                                                                fi
-                                                                info_msg "$YELLOW[ SET INTERPRETER ]: $BLUE[$bin_dir_pth/$binary_name]"
-                                                                patchelf $pvarg --set-interpreter "$new_interp" "$binary_name"||exit 1
-                                                        fi)||exit 1
-                                                fi
-                                                info_msg "$YELLOW[ PATCH INTERPRETER ]: $BLUE[$interpreter_pth]"
-                                                sed -i 's|/usr|/XXX|g;s|/lib|/XXX|g;s|/etc|/XXX|g' "$interpreter_pth"||exit 1
-                                                LIBRARIES["${INTERPRETER}_patched"]=1
-                                        elif [[ "${LIBRARIES["${INTERPRETER}_sedpreload"]}" != 1 ]]
-                                            then
-                                                info_msg "$YELLOW[ REMOVE INTERPRETER PRELOAD ]: $BLUE[$interpreter_pth]"
-                                                sed -i 's|/etc/ld.so.preload|/XXX/ld.so.preload|g' "$interpreter_pth"||exit 1
-                                                LIBRARIES["${INTERPRETER}_sedpreload"]=1
-                                        fi
-                                fi
                                 info_msg "[ DONE ]"
                                 binary_number=$(( $binary_number + 1 ))
                             else
@@ -1380,7 +1352,9 @@ for dst_dir in "${!DST_DIRS[@]}"
                                 fi
                         fi
                         wexec_name="${wrappe_exec##*/}"
-                        IS_SCRIPT="$(file "$(readlink -f "$wrappe_exec")"|grep -o script)"
+                        if [ "$(head -c 2 "$(readlink -f "$wrappe_exec")" 2>/dev/null)" = '#!' ]; then
+                            IS_SCRIPT=script
+                        fi
                         if [ -n "$IS_SCRIPT" ]
                             then
                                 wrappe_exec="$src_dir/sharun"

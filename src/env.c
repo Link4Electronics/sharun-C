@@ -354,6 +354,7 @@ static void process_share_dir(const char *sharun_dir) {
     snprintf(share_dir, sizeof(share_dir), "%s/share", sharun_dir);
     if (!sharun_is_dir(share_dir)) return;
 
+    sharun_add_to_env("XDG_DATA_DIRS", "/etc");
     sharun_add_to_env("XDG_DATA_DIRS", "/run/current-system/sw/share");
     sharun_add_to_env("XDG_DATA_DIRS", "/run/opengl-driver/share");
     sharun_add_to_env("XDG_DATA_DIRS", "/usr/share");
@@ -596,6 +597,7 @@ static void process_ssl_certs(void) {
         "/etc/pki/tls/cert.pem",
         "/etc/pki/tls/cacert.pem",
         "/etc/ssl/cert.pem",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
         "/var/lib/ca-certificates/ca-bundle.pem",
         NULL
     };

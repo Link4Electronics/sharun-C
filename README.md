@@ -1,8 +1,6 @@
 # sharun-C
 Run dynamically linked ELF binaries everywhere (musl and glibc are supported).
 
-![sharun](img/sharun.gif)
-
 * It works by mapping the interpreter (such as ld-linux-x86-64.so.2) into memory, creating a stack for it (containing the auxiliary vector, arguments, and environment variables), and then jumping to the entry point with the new stack.
 * [lib4bin](https://github.com/Link4Electronics/sharun-C/blob/main/lib4bin) pulls out the binary file and all the libraries on which it depends, strip it and forms the `bin`, `shared/{bin,lib,lib32}` directories (see [screenshots](https://github.com/Link4Electronics/sharun-C?tab=readme-ov-file#screenshots)) and generate a file `shared/{lib,lib32}/lib.path` with a list of all directories that contain libraries for pass it to interpreter `--library-path`. The paths in this file are specified on a new line with a `+` at the beginning and relative to the directory in which it is located.
 
@@ -16,6 +14,7 @@ Run dynamically linked ELF binaries everywhere (musl and glibc are supported).
 * ppc64 (POWER 64-bit big-endian ELFv2) — glibc only (CI via `kth5/archpower` Docker)
 * ppc (POWER 32-bit big-endian) — glibc only (local build, `-DSHARUN_STATIC=OFF` — no static libs available)
 * s390x (IBM Z 64-bit) — musl-static (CI) or glibc
+* Supports page sizes of 4 KB, 16 KB, and 64 KB
 
 ## To get started:
 * **Download the latest revision**
@@ -84,7 +83,7 @@ cp ./build/sharun .
     -s, --strip              Strip binaries and libraries (env: STRIP=1)
     -v, --verbose            Verbose mode (env: VERBOSE=1)
     -w, --with-sharun        Pack sharun from PATH or env or download
-                                (env: WITH_SHARUN=1, SHARUN=/path|URL, SHARUN_URL=URL, UPX_SHARUN=1)
+                                (env: WITH_SHARUN=1, SHARUN=/path|URL, SHARUN_URL=URL)
     -o, --with-wrappe        Pack with wrappe from PATH or env or download
                                 (env: WITH_WRAPPE=1, WRAPPE=/path|URL, WRAPPE_URL=URL)
     -c, --wrappe-clvl 0-22   Specify the compression level for wrappe (env: WRAPPE_CLVL=0-22) (default: 8)
@@ -171,9 +170,6 @@ chmod +x ./sharun
 * You can preload libraries using `.preload` file. Specify the necessary libraries in it from a new line. You can use the full paths to libraries or only their names if they are located in `shared/{lib,lib32}/`
 This can be useful, for example, to use [pathmap](https://github.com/VHSgunzo/pathmap) library to reassign paths.
 
-## Screenshots:
-![tree](img/tree.png)
-
 ## Environment variables that are set if sharun finds a directory or file:
 |||
 |---|---|
@@ -225,26 +221,6 @@ This can be useful, for example, to use [pathmap](https://github.com/VHSgunzo/pa
 |---|---|
 |`GIO_LAUNCH_DESKTOP` | `${SHARUN_DIR}/bin/gio-launch-desktop`|
 |`__EGL_VENDOR_LIBRARY_FILENAMES` | `/usr/share/glvnd/egl_vendor.d/10_nvidia.json` (if env not set)|
-
-## Projects that use sharun:
-* [AnyLinux-AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages)
-* [AppBundleHUB](https://github.com/xplshn/AppBundleHUB)
-* [Converseen](https://github.com/Faster3ck/Converseen)
-* [CPU-X](https://github.com/TheTumultuousUnicornOfDarkness/CPU-X)
-* [Eden](https://git.eden-emu.dev/eden-emu/eden)
-* [Ghostty-AppImage](https://github.com/psadi/ghostty-appimage)
-* [GOverlay](https://github.com/benjamimgois/goverlay)
-* [GPU-T](https://github.com/lseurttyuu/GPU-T)
-* [Interstellar](https://github.com/jwr1/interstellar)
-* [LibreSprite](https://github.com/LibreSprite/LibreSprite)
-* [MangoJuice](https://github.com/radiolamp/mangojuice)
-* [pelfCreator](https://pelf.xplshn.com.ar/docs/tooling/#pelfCreator:~:text=only%20the%20AppDir.-,%2D%2Dsharun,-%3Cbinaries%3E%3A%20Processes)
-* [PPSSPP](https://github.com/hrydgard/ppsspp)
-* [PrusaSlicer.AppImage](https://github.com/probonopd/PrusaSlicer.AppImage)
-* [QDiskInfo](https://github.com/edisionnano/QDiskInfo)
-* [RMG](https://github.com/Rosalie241/RMG)
-* [RSS Guard](https://github.com/martinrotter/rssguard)
-* [SoarPkgs](https://github.com/pkgforge/soarpkgs)
 
 ## References
 * https://brioche.dev/blog/portable-dynamically-linked-packages-on-linux

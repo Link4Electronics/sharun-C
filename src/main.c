@@ -28,6 +28,25 @@ extern char **environ;
 // ── PT_INTERP constant ────────────────────────────────────────────
 #define PT_INTERP 3
 
+// ── Shell discovery for AppRun.sh ───────────────────────────────
+static char *find_shell(void) {
+    static const char *candidates[] = {
+        "/bin/sh", "/bin/bash",
+        "/usr/bin/sh", "/usr/bin/bash",
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+        if (sharun_is_exe(candidates[i]))
+            return strdup(candidates[i]);
+    }
+    static const char *names[] = {"sh", "bash"};
+    char buf[PATH_MAX];
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (sharun_which(names[i], buf, sizeof(buf)))
+            return strdup(buf);
+    }
+    return NULL;
+}
+
 // ── File-scope internal helpers ──────────────────────────────────
 
 #if SHARUN_ELF32
@@ -1061,6 +1080,27 @@ int main(int argc, char **argv) {
 
     // ── AppRun handling ─────────────────────────────────────────
     if (strcmp(bin_name, "AppRun") == 0) {
+        // Check for AppRun.sh first
+        char apprun_sh_path[PATH_MAX];
+        snprintf(apprun_sh_path, sizeof(apprun_sh_path), "%s/AppRun.sh", sharun_dir);
+        if (sharun_is_file(apprun_sh_path)) {
+            char *shell = find_shell();
+            if (!shell) {
+                fprintf(stderr, "Failed to find a shell for %s\n", apprun_sh_path);
+                exit(1);
+            }
+            const char **av = malloc((exec_args.len + 3) * sizeof(const char *));
+            if (!av) { fprintf(stderr, "Out of memory\n"); exit(1); }
+            size_t avi = 0;
+            av[avi++] = shell;
+            av[avi++] = apprun_sh_path;
+            for (size_t i = 0; i < exec_args.len; ++i)
+                av[avi++] = exec_args.data[i];
+            av[avi++] = NULL;
+            execve(shell, (char *const *)av, environ);
+            fprintf(stderr, "Failed to run AppRun.sh: %s\n", strerror(errno));
+            exit(1);
+        }
         char appname_file[PATH_MAX];
         snprintf(appname_file, sizeof(appname_file), "%s/%s", sharun_dir, ".app");
         char *appname = NULL;
