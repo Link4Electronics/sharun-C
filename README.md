@@ -30,9 +30,7 @@ cmake --build build
 cp ./build/sharun .
 ```
 
-  **Full build** (default): `SHARUN_SETENV=ON SHARUN_LIB4BIN=ON SHARUN_PYINSTALLER=ON` ~130KB.
-  
-  **Lite build** (no extras): add `-DSHARUN_ELF32=OFF -DSHARUN_SETENV=OFF -DSHARUN_LIB4BIN=OFF -DSHARUN_PYINSTALLER=OFF` ~70KB.
+  All features are enabled by default (ELF32, SETENV, LIB4BIN, PYINSTALLER). No compile-time toggles.
 
 * Or take an already precompiled binary file from the [releases](https://github.com/Link4Electronics/sharun-C/releases)
 

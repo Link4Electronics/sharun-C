@@ -36,16 +36,16 @@
 #  define SHARUN_VERSION "0.8.1"
 #endif
 #ifndef SHARUN_ELF32
-#  define SHARUN_ELF32 0
+#  define SHARUN_ELF32 1
 #endif
 #ifndef SHARUN_SETENV
-#  define SHARUN_SETENV 0
+#  define SHARUN_SETENV 1
 #endif
 #ifndef SHARUN_LIB4BIN
-#  define SHARUN_LIB4BIN 0
+#  define SHARUN_LIB4BIN 1
 #endif
 #ifndef SHARUN_PYINSTALLER
-#  define SHARUN_PYINSTALLER 0
+#  define SHARUN_PYINSTALLER 1
 #endif
 // ── String array (dynamic) ──────────────────────────────────────
 typedef struct {
@@ -199,14 +199,12 @@ void sharun_gen_lib_path(const char *library_path, const char *lib_path_file);
 // Interpreter lookup
 void sharun_get_interpreter(const char *library_path, char *out, size_t outsz);
 
-// ── Environment setup (setenv feature) ──────────────────────────
-#if SHARUN_SETENV
+// ── Environment setup ───────────────────────────────────────────
 strarr_t sharun_read_dotenv(const char *dotenv_dir);
 void sharun_setup_environment(const char *sharun_dir,
                                const char *bin_dir,
                                const char *library_path,
                                const char *lib_path_data);
-#endif
 
 // ── Userland execve ─────────────────────────────────────────────
 LoadedElf sharun_map_elf(const char *path, uint64_t fixed_base);

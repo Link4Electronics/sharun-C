@@ -65,25 +65,10 @@ jobs:
               apk add --no-cache zlib-static 2>/dev/null || true
               cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=MinSizeRel \
-                -DSHARUN_STATIC=ON \
-                -DSHARUN_ELF32=ON \
-                -DSHARUN_SETENV=ON \
-                -DSHARUN_LIB4BIN=ON \
-                -DSHARUN_PYINSTALLER=ON
+                -DSHARUN_STATIC=ON
               cmake --build build
               cp build/sharun /root/sharun-${{ matrix.arch }}
               strip --strip-all /root/sharun-${{ matrix.arch }}
-              # Lite build (no features)
-              cmake -S . -B build-lite \
-                -DCMAKE_BUILD_TYPE=MinSizeRel \
-                -DSHARUN_STATIC=ON \
-                -DSHARUN_ELF32=OFF \
-                -DSHARUN_SETENV=OFF \
-                -DSHARUN_LIB4BIN=OFF \
-                -DSHARUN_PYINSTALLER=OFF
-              cmake --build build-lite
-              cp build-lite/sharun /root/sharun-${{ matrix.arch }}-lite
-              strip --strip-all /root/sharun-${{ matrix.arch }}-lite
             "
 
       - name: super-strip (sstrip)
@@ -155,25 +140,10 @@ jobs:
             cd /build
             cmake -S . -B build \
               -DCMAKE_BUILD_TYPE=MinSizeRel \
-              -DSHARUN_STATIC=ON \
-              -DSHARUN_ELF32=ON \
-              -DSHARUN_SETENV=ON \
-              -DSHARUN_LIB4BIN=ON \
-              -DSHARUN_PYINSTALLER=ON
+              -DSHARUN_STATIC=ON
             cmake --build build
             cp build/sharun /sharun-${{ matrix.arch }}
             strip --strip-all /sharun-${{ matrix.arch }}
-            # Lite build
-            cmake -S . -B build-lite \
-              -DCMAKE_BUILD_TYPE=MinSizeRel \
-              -DSHARUN_STATIC=ON \
-              -DSHARUN_ELF32=OFF \
-              -DSHARUN_SETENV=OFF \
-              -DSHARUN_LIB4BIN=OFF \
-              -DSHARUN_PYINSTALLER=OFF
-            cmake --build build-lite
-            cp build-lite/sharun /sharun-${{ matrix.arch }}-lite
-            strip --strip-all /sharun-${{ matrix.arch }}-lite
           "
           sudo cp ${{ github.workspace }}/ppc64-rootfs/sharun-* .
           sudo chown $(id -u):$(id -g) sharun-*

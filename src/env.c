@@ -1,22 +1,6 @@
 #define _GNU_SOURCE
 #include "sharun.h"
 
-// ── Stub when SETENV is off ────────────────────────────────────
-#if !SHARUN_SETENV
-
-strarr_t sharun_read_dotenv(const char *dotenv_dir) {
-    (void)dotenv_dir;
-    strarr_t out = strarr_init;
-    return out;
-}
-
-void sharun_setup_environment(const char *a, const char *b,
-                               const char *c, const char *d) {
-    (void)a; (void)b; (void)c; (void)d;
-}
-
-#else
-
 // ── Forward declarations of static helpers ─────────────────────
 static void add_to_xdg_data_env(const char *xdg_data_dirs,
                                  const char *env, const char *path);
@@ -177,6 +161,18 @@ static void process_lib_path_dirs(const char *lib_path_data,
         if (strcmp(dirs[i], "xtables") == 0)
             setenv("XTABLES_LIBDIR", dir_str, 1);
 
+        if (strncmp(dirs[i], "mlt-", 4) == 0) {
+            setenv("MLT_REPOSITORY", dir_str, 1);
+            char profile_sub[PATH_MAX];
+            snprintf(profile_sub, sizeof(profile_sub), "%s/profiles", dir_str);
+            if (sharun_is_dir(profile_sub))
+                setenv("MLT_PROFILES_PATH", profile_sub, 1);
+            char preset_sub[PATH_MAX];
+            snprintf(preset_sub, sizeof(preset_sub), "%s/presets", dir_str);
+            if (sharun_is_dir(preset_sub))
+                setenv("MLT_PRESETS_PATH", preset_sub, 1);
+        }
+
         if (strncmp(dirs[i], "spa-", 4) == 0)
             setenv("SPA_PLUGIN_DIR", dir_str, 1);
 
@@ -257,6 +253,43 @@ static void process_lib_path_dirs(const char *lib_path_data,
             if (sharun_is_dir(loaders)) setenv("IMLIB2_LOADER_PATH", loaders, 1);
             if (sharun_is_dir(filters)) setenv("IMLIB2_FILTER_PATH", filters, 1);
         }
+
+        if (strcmp(dirs[i], "ghostscript") == 0) {
+            bool gs_found = false;
+            DIR *gsd = opendir(dir_str);
+            if (gsd) {
+                struct dirent *gse;
+                while ((gse = readdir(gsd)) != NULL) {
+                    if (gse->d_name[0] == '.') continue;
+                    char gs_init[PATH_MAX];
+                    snprintf(gs_init, sizeof(gs_init), "%s/%s/Resource/Init", dir_str, gse->d_name);
+                    if (sharun_is_dir(gs_init)) {
+                        char gs_lib[PATH_MAX];
+                        snprintf(gs_lib, sizeof(gs_lib), "%s/%s/Resource/Init:%s/%s/Resource",
+                                 dir_str, gse->d_name, dir_str, gse->d_name);
+                        setenv("GS_LIB", gs_lib, 1);
+                        gs_found = true;
+                        break;
+                    }
+                }
+                closedir(gsd);
+            }
+            if (!gs_found) {
+                char gs_unver[PATH_MAX];
+                snprintf(gs_unver, sizeof(gs_unver), "%s/Resource/Init", dir_str);
+                if (sharun_is_dir(gs_unver)) {
+                    char gs_lib[PATH_MAX];
+                    snprintf(gs_lib, sizeof(gs_lib), "%s/Resource/Init:%s/Resource", dir_str, dir_str);
+                    setenv("GS_LIB", gs_lib, 1);
+                }
+            }
+        }
+
+        if (strcmp(dirs[i], "ladspa") == 0)
+            setenv("LADSPA_PATH", dir_str, 1);
+
+        if (strncmp(dirs[i], "frei0r-", 7) == 0)
+            setenv("FREI0R_PATH", dir_str, 1);
 
         if (strncmp(dirs[i], "babl-", 5) == 0)
             setenv("BABL_PATH", dir_str, 1);
@@ -516,8 +549,10 @@ static void process_share_dir(const char *sharun_dir) {
 
         if (strcmp(e->d_name, "X11") == 0) {
             snprintf(sub, sizeof(sub), "%s/%s/xkb", share_dir, e->d_name);
-            if (access("/usr/share/X11/xkb", F_OK) != 0 && sharun_is_dir(sub))
+            if (access("/usr/share/X11/xkb", F_OK) != 0 && sharun_is_dir(sub)) {
                 setenv("XKB_CONFIG_ROOT", sub, 1);
+                setenv("QT_XKB_CONFIG_ROOT", sub, 1);
+            }
             snprintf(sub, sizeof(sub), "%s/%s/locale", share_dir, e->d_name);
             if (access("/usr/share/X11/locale", F_OK) != 0 && sharun_is_dir(sub))
                 setenv("XLOCALEDIR", sub, 1);
@@ -582,6 +617,13 @@ static void process_etc_dir(const char *sharun_dir) {
             snprintf(fonts_conf, sizeof(fonts_conf), "%s/fonts.conf", full);
             if (access("/etc/fonts/fonts.conf", F_OK) != 0 && sharun_is_file(fonts_conf))
                 setenv("FONTCONFIG_FILE", fonts_conf, 1);
+        }
+
+        if (strcmp(e->d_name, "ssl") == 0) {
+            char openssl_conf[PATH_MAX];
+            snprintf(openssl_conf, sizeof(openssl_conf), "%s/openssl.cnf", full);
+            if (sharun_is_file(openssl_conf))
+                setenv("OPENSSL_CONF", openssl_conf, 1);
         }
 
         free(full);
@@ -702,5 +744,3 @@ void sharun_setup_environment(const char *sharun_dir,
     // SSL certificates
     process_ssl_certs();
 }
-
-#endif // SHARUN_SETENV

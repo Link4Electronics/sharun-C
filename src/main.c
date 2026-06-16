@@ -7,23 +7,21 @@
 #endif
 
 #ifndef SHARUN_ELF32
-#  define SHARUN_ELF32 0
+#  define SHARUN_ELF32 1
 #endif
 #ifndef SHARUN_SETENV
-#  define SHARUN_SETENV 0
+#  define SHARUN_SETENV 1
 #endif
 #ifndef SHARUN_LIB4BIN
-#  define SHARUN_LIB4BIN 0
+#  define SHARUN_LIB4BIN 1
 #endif
 #ifndef SHARUN_PYINSTALLER
-#  define SHARUN_PYINSTALLER 0
+#  define SHARUN_PYINSTALLER 1
 #endif
 
 extern char **environ;
 
-#if SHARUN_PYINSTALLER
-#  include <ftw.h>
-#endif
+#include <ftw.h>
 
 // ── PT_INTERP constant ────────────────────────────────────────────
 #define PT_INTERP 3
@@ -47,9 +45,51 @@ static char *find_shell(void) {
     return NULL;
 }
 
+// ── read_preload ─────────────────────────────────────────────────
+static char *read_preload(const char *sharun_dir) {
+    char preload_path[PATH_MAX];
+    snprintf(preload_path, sizeof(preload_path), "%s/.preload", sharun_dir);
+    if (!sharun_is_file(preload_path)) return NULL;
+
+    FILE *pf = fopen(preload_path, "rb");
+    if (!pf) {
+        fprintf(stderr, "Failed to read .preload file: %s\n", preload_path);
+        exit(1);
+    }
+
+    size_t cap = 256, len = 0;
+    char *joined = malloc(cap);
+    if (!joined) { fprintf(stderr, "Out of memory\n"); exit(1); }
+    joined[0] = '\0';
+
+    char line[4096];
+    while (fgets(line, sizeof(line), pf)) {
+        size_t llen = strlen(line);
+        while (llen > 0 && (line[llen-1] == '\n' || line[llen-1] == '\r'))
+            line[--llen] = '\0';
+        char *trimmed = line;
+        while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r')
+            trimmed++;
+        if (!*trimmed) continue;
+
+        size_t tlen = strlen(trimmed);
+        if (len) {
+            while (len + 1 + tlen + 1 >= cap) { cap *= 2; joined = realloc(joined, cap); if (!joined) exit(1); }
+            joined[len++] = ':';
+        } else {
+            while (tlen + 1 >= cap) { cap = tlen + 1; joined = realloc(joined, cap); if (!joined) exit(1); }
+        }
+        memcpy(joined + len, trimmed, tlen + 1);
+        len += tlen;
+    }
+    fclose(pf);
+
+    if (len == 0) { free(joined); return NULL; }
+    return joined;
+}
+
 // ── File-scope internal helpers ──────────────────────────────────
 
-#if SHARUN_ELF32
 static bool is_elf32(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return false;
@@ -59,18 +99,11 @@ static bool is_elf32(const char *path) {
     if (n != 5) return false;
     return hdr[0] == 0x7f && hdr[1] == 'E' && hdr[2] == 'L' && hdr[3] == 'F' && hdr[4] == 1;
 }
-#else
-static bool is_elf32(const char *path) {
-    (void)path;
-    return false;
-}
-#endif
 
 bool sharun_is_elf32(const char *path) {
     return is_elf32(path);
 }
 
-#if SHARUN_PYINSTALLER
 static bytearr_t get_elf(const char *path, bool elf32_bin) {
     bytearr_t result = bytearr_init;
     FILE *f = fopen(path, "rb");
@@ -153,74 +186,9 @@ static bool is_elf_section(const bytearr_t *elf, const char *section_name) {
     }
     return false;
 }
-#else
-static bytearr_t get_elf(const char *path, bool elf32_bin) {
-    (void)path;
-    (void)elf32_bin;
-    return (bytearr_t){0};
-}
-static bool is_elf_section(const bytearr_t *elf, const char *section_name) {
-    (void)elf;
-    (void)section_name;
-    return false;
-}
-#endif
 
 
-// ── PT_INTERP patching ──────────────────────────────────────────
-
-static bool set_interp(bytearr_t *elf_bytes, const char *elf_path, const char *new_interp) {
-    const unsigned char *raw = elf_bytes->data;
-    size_t size = elf_bytes->len;
-    if (size < 64) return false;
-
-    bool is_64  = (raw[4] == 2);
-    bool elf_be = (raw[5] == 2);
-    unsigned e_phoff, e_phentsize, e_phnum;
-
-    if (is_64) {
-        e_phoff     = (unsigned)read_u64(raw + 28, elf_be);
-        e_phentsize = read_u16(raw + 54, elf_be);
-        e_phnum     = read_u16(raw + 56, elf_be);
-    } else {
-        e_phoff     = read_u32(raw + 28, elf_be);
-        e_phentsize = read_u16(raw + 42, elf_be);
-        e_phnum     = read_u16(raw + 44, elf_be);
-    }
-
-    unsigned p_offset_off = is_64 ? 8 : 4;
-    unsigned p_filesz_off = is_64 ? 32 : 16;
-
-    for (unsigned i = 0; i < e_phnum; ++i) {
-        unsigned ph_off = e_phoff + i * e_phentsize;
-        if (ph_off + 8 > size) break;
-
-        if (read_u32(raw + ph_off, elf_be) != PT_INTERP) continue;
-
-        uint64_t p_offset = is_64
-            ? read_u64(raw + ph_off + p_offset_off, elf_be)
-            : read_u32(raw + ph_off + p_offset_off, elf_be);
-        uint64_t p_filesz = is_64
-            ? read_u64(raw + ph_off + p_filesz_off, elf_be)
-            : read_u32(raw + ph_off + p_filesz_off, elf_be);
-
-        size_t start = (size_t)p_offset;
-        size_t end   = start + (size_t)p_filesz;
-        if (end > size) return false;
-        if (elf_bytes->data[end - 1] != 0) return false;
-
-        size_t new_len = strlen(new_interp);
-        if (new_len > p_filesz - 1) return false;
-
-        memcpy(&elf_bytes->data[start], new_interp, new_len);
-        for (size_t j = start + new_len; j < end - 1; ++j)
-            elf_bytes->data[j] = 0;
-        elf_bytes->data[end - 1] = 0;
-
-        return sharun_write_file(elf_path, elf_bytes->data, elf_bytes->len);
-    }
-    return false;
-}
+// ── Interpreter lookup ──────────────────────────────────────────
 
 bool sharun_needs_interp(const char *path) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -291,6 +259,10 @@ void sharun_get_interpreter(const char *library_path, char *out, size_t outsz) {
         "ld-linux-loongarch64-lp64d.so.1", "ld-musl-loongarch64-lp64d.so.1"
 #elif defined(__s390x__)
         "ld-linux-s390x.so.2", "ld-musl-s390x.so.1"
+#elif defined(__arm__)
+        "ld-linux-armhf.so.3", "ld-musl-armhf.so.1", "ld-linux.so.3"
+#elif defined(__i386__)
+        "ld-linux.so.2", "ld-musl-i386.so.1"
 #else
         "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2"
 #endif
@@ -312,7 +284,6 @@ void sharun_get_interpreter(const char *library_path, char *out, size_t outsz) {
 
 // ── lib.path generation ──────────────────────────────────────────
 
-#if SHARUN_PYINSTALLER
 struct glp_ctx {
     const char *library_path;
     size_t library_path_len;
@@ -355,10 +326,8 @@ static int glp_callback(const char *fpath, const struct stat *sb, int tflag, str
     g_glp_ctx.dirs[g_glp_ctx.ndirs++] = strdup(parent);
     return 0;
 }
-#endif
 
 void sharun_gen_lib_path(const char *library_path, const char *lib_path_file) {
-#if SHARUN_PYINSTALLER
     g_glp_ctx.library_path = library_path;
     g_glp_ctx.library_path_len = strlen(library_path);
     g_glp_ctx.dirs = NULL;
@@ -425,16 +394,11 @@ void sharun_gen_lib_path(const char *library_path, const char *lib_path_file) {
         free((void *)g_glp_ctx.dirs[i]);
     free(g_glp_ctx.dirs);
     free(content);
-#else
-    (void)library_path;
-    (void)lib_path_file;
-#endif
 }
 
 // ── Decompress lib4bin ──────────────────────────────────────────
 
 unsigned char *sharun_decompress_lib4bin(size_t *out_len) {
-#if SHARUN_LIB4BIN
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
     if (inflateInit2(&strm, MAX_WBITS) != Z_OK) {
@@ -458,10 +422,6 @@ unsigned char *sharun_decompress_lib4bin(size_t *out_len) {
     }
     if (out_len) *out_len = lib4bin_data_uncompressed_size;
     return result;
-#else
-    (void)out_len;
-    return NULL;
-#endif
 }
 
 // ── Userland execve (avoids /proc/self/exe -> ld) ────────────────
@@ -925,18 +885,14 @@ static void print_usage(void) {
         "\n"
         "[ Usage ]: %s [OPTIONS] [EXEC ARGS]...\n",
         SHARUN_NAME, SHARUN_NAME);
-#if SHARUN_LIB4BIN
     fprintf(stderr, "     Use lib4bin for create 'bin' and 'shared' dirs\n");
-#endif
     fprintf(stderr,
 "\n"
 "[ Arguments ]:\n"
 "    [EXEC ARGS]...              Command line arguments for execution\n"
 "\n"
 "[ Options ]:\n");
-#if SHARUN_LIB4BIN
     fprintf(stderr, "     l,  lib4bin [ARGS]         Launch the built-in lib4bin\n");
-#endif
     fprintf(stderr,
 "    -g,  --gen-lib-path         Generate a lib.path file\n"
 "    -v,  --version              Print version\n"
@@ -1231,7 +1187,6 @@ int main(int argc, char **argv) {
             return 0;
         }
 
-#if SHARUN_LIB4BIN
         if (strcmp(arg, "l") == 0 || strcmp(arg, "lib4bin") == 0) {
             size_t script_len;
             unsigned char *lib4bin_script = sharun_decompress_lib4bin(&script_len);
@@ -1294,7 +1249,6 @@ int main(int argc, char **argv) {
             free(lib4bin_script);
             exit(WEXITSTATUS(status));
         }
-#endif
 
     }
 
@@ -1374,27 +1328,33 @@ int main(int argc, char **argv) {
     const char *bin_str = bin;
 
     // ELF32 check
-#if SHARUN_ELF32
     bool is_elf32_bin = is_elf32(bin_str);
-#else
-    bool is_elf32_bin = false;
-#endif
 
     // PyInstaller check
-#if SHARUN_PYINSTALLER
     bytearr_t elf_bytes = get_elf(bin_str, is_elf32_bin);
-#else
-    bytearr_t elf_bytes = bytearr_init;
-#endif
 
     // Select library path based on ELF class
-    const char *library_path_base = is_elf32_bin ? shared_lib32 : shared_lib;
+    const char *library_path_base = shared_lib;
+    if (is_elf32_bin && sharun_is_dir(shared_lib32))
+        library_path_base = shared_lib32;
 
     // ── Dotenv ──────────────────────────────────────────────────
     strarr_t unset_envs = strarr_init;
-#if SHARUN_SETENV
     unset_envs = sharun_read_dotenv(sharun_dir);
-#endif
+
+    // ── PYTHONNOUSERSITE ──────────────────────────────────────────
+    {
+        char python_bin[PATH_MAX];
+        snprintf(python_bin, sizeof(python_bin), "%s/python", bin_dir);
+        char python3_bin[PATH_MAX];
+        snprintf(python3_bin, sizeof(python3_bin), "%s/python3", bin_dir);
+        if (sharun_is_exe(python_bin) || sharun_is_exe(python3_bin)) {
+            char *existing = sharun_get_env("PYTHONNOUSERSITE");
+            if (!existing || !*existing)
+                setenv("PYTHONNOUSERSITE", "1", 1);
+            free(existing);
+        }
+    }
 
     // ── LD_PRELOAD / QT_PLUGIN_PATH sanitization ────────────────
     {
@@ -1481,11 +1441,9 @@ int main(int argc, char **argv) {
     // ── Read lib.path data ──────────────────────────────────────
     char *lib_path_data = sharun_read_file(lib_path_file);
 
-    // ── Environment setup (setenv feature) ──────────────────────
-#if SHARUN_SETENV
+    // ── Environment setup ───────────────────────────────────────
     sharun_setup_environment(sharun_dir, bin_dir, library_path_base,
                              lib_path_data ? lib_path_data : "");
-#endif
 
     // ── Build LD_LIBRARY_PATH ───────────────────────────────────
     char *library_path = strdup(library_path_base);
@@ -1601,6 +1559,14 @@ int main(int argc, char **argv) {
         if (!tmp) { fprintf(stderr, "Out of memory\n"); exit(1); }
         library_path = tmp;
         memcpy(library_path + cur, more, mlen + 1);
+#elif defined(__arm__) || defined(__aarch64__)
+        size_t cur = strlen(library_path);
+        const char *more = ":/usr/lib/arm-linux-gnueabihf";
+        size_t mlen = strlen(more);
+        char *tmp = realloc(library_path, cur + mlen + 1);
+        if (!tmp) { fprintf(stderr, "Out of memory\n"); exit(1); }
+        library_path = tmp;
+        memcpy(library_path + cur, more, mlen + 1);
 #endif
     } else {
 #if defined(__x86_64__)
@@ -1710,108 +1676,94 @@ int main(int argc, char **argv) {
         free(printenv);
     }
 
-    // ── PyInstaller / ELF32 check ───────────────────────────────
-#if SHARUN_PYINSTALLER
+    // ── PyInstaller / Bun / ELF32 check ─────────────────────────
     bool is_pyinstaller_elf = is_elf_section(&elf_bytes, "pydata");
+    bool is_bun_elf = is_elf_section(&elf_bytes, ".bun");
     char pyinstaller_dir_path[PATH_MAX];
     snprintf(pyinstaller_dir_path, sizeof(pyinstaller_dir_path), "%s/_internal", shared_bin);
     bool is_pyinstaller_dir = sharun_is_dir(pyinstaller_dir_path);
-#else
-    bool is_pyinstaller_elf = false;
-    bool is_pyinstaller_dir = false;
-#endif
 
     // ── .preload -> LD_PRELOAD ──────────────────────────────────
     {
-        char preload_path[PATH_MAX];
-        snprintf(preload_path, sizeof(preload_path), "%s/.preload", sharun_dir);
-        if (sharun_is_file(preload_path)) {
-            FILE *pf = fopen(preload_path, "rb");
-            if (!pf) {
-                fprintf(stderr, "Failed to read .preload file: %s\n", preload_path);
-                exit(1);
-            }
-            size_t joined_cap = 256;
-            size_t joined_len = 0;
-            char *joined = malloc(joined_cap);
-            if (!joined) { fprintf(stderr, "Out of memory\n"); exit(1); }
-            joined[0] = '\0';
-
-            char line[4096];
-            while (fgets(line, sizeof(line), pf)) {
-                size_t llen = strlen(line);
-                while (llen > 0 && (line[llen-1] == '\n' || line[llen-1] == '\r'))
-                    line[--llen] = '\0';
-                char *trimmed = line;
-                while (*trimmed == ' ' || *trimmed == '\t' || *trimmed == '\r')
-                    trimmed++;
-                if (!*trimmed) continue;
-
-                size_t tlen = strlen(trimmed);
-                if (joined_len) {
-                    if (joined_len + 1 + tlen + 1 >= joined_cap) {
-                        while (joined_len + 1 + tlen + 1 >= joined_cap) joined_cap *= 2;
-                        joined = realloc(joined, joined_cap);
-                        if (!joined) { fprintf(stderr, "Out of memory\n"); exit(1); }
-                    }
-                    joined[joined_len++] = ':';
-                } else {
-                    if (tlen + 1 >= joined_cap) {
-                        joined_cap = tlen + 1;
-                        joined = realloc(joined, joined_cap);
-                        if (!joined) { fprintf(stderr, "Out of memory\n"); exit(1); }
-                    }
-                }
-                memcpy(joined + joined_len, trimmed, tlen + 1);
-                joined_len += tlen;
-            }
-            fclose(pf);
-
-            if (joined_len > 0)
-                setenv("LD_PRELOAD", joined, 1);
-            free(joined);
+        char *preload = read_preload(sharun_dir);
+        if (preload) {
+            setenv("LD_PRELOAD", preload, 1);
+            free(preload);
         }
     }
 
 
     // ── Determine argv0 for the target binary ─────────────────
     char *argv0_for_target;
-    if (is_pyinstaller_elf || is_elf32_bin)
+    if (is_pyinstaller_elf || is_bun_elf || is_elf32_bin)
         argv0_for_target = strdup(bin_str);
     else
         argv0_for_target = strdup(arg0_path);
 
     // ── Execute ─────────────────────────────────────────────────
-    if (is_pyinstaller_elf || is_elf32_bin) {
-        if (!is_pyinstaller_dir && is_pyinstaller_elf) {
-            // PyInstaller, no .dir > patch interpreter in-place, then exec directly
-            if (set_interp(&elf_bytes, bin_str, interpreter)) {
-                const char **av = malloc((exec_args.len + 2) * sizeof(const char *));
-                if (!av) { fprintf(stderr, "Out of memory\n"); exit(1); }
-                size_t avi = 0;
-                av[avi++] = bin_str;
-                for (size_t i = 0; i < exec_args.len; ++i)
-                    av[avi++] = exec_args.data[i];
-                av[avi++] = NULL;
-                execve(bin_str, (char *const *)av, environ);
-            } else {
-                fprintf(stderr, "Failed to set ELF interpreter: %s\n", bin_str);
-                exit(1);
+    bytearr_free(&elf_bytes);
+
+    if ((is_pyinstaller_elf && !is_pyinstaller_dir) || is_bun_elf) {
+        // PyInstaller without .dir, or bun -> copy interpreter to temp,
+        // set LD_LIBRARY_PATH and LD_PRELOAD, exec directly
+        const char *tmpdir = getenv("TMPDIR");
+        if (!tmpdir || !*tmpdir) tmpdir = getenv("XDG_RUNTIME_DIR");
+        if (!tmpdir || !*tmpdir) tmpdir = "/tmp";
+        char temp_ld[PATH_MAX];
+        snprintf(temp_ld, sizeof(temp_ld), "%s/.ld-sharun.so.67", tmpdir);
+        if (interpreter[0] && sharun_is_file(interpreter)) {
+            int sfd = open(interpreter, O_RDONLY | O_CLOEXEC);
+            if (sfd >= 0) {
+                int dfd = open(temp_ld, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0755);
+                if (dfd >= 0) {
+                    char buf[65536];
+                    ssize_t nr;
+                    while ((nr = read(sfd, buf, sizeof(buf))) > 0) {
+                        ssize_t nw = write(dfd, buf, (size_t)nr);
+                        (void)nw;
+                    }
+                    close(dfd);
+                }
+                close(sfd);
             }
-        } else {
-            // PyInstaller with .dir, or ELF32 -> use interpreter
-            bytearr_free(&elf_bytes);
-            sharun_userland_execve(bin_str, interpreter, &exec_args,
-                                   library_path, argv0_for_target);
         }
+        setenv("LD_LIBRARY_PATH", library_path, 1);
+        {
+            char *preload = read_preload(sharun_dir);
+            if (preload) {
+                setenv("LD_PRELOAD", preload, 1);
+                free(preload);
+            }
+        }
+        const char **av = malloc((exec_args.len + 2) * sizeof(const char *));
+        if (!av) { fprintf(stderr, "Out of memory\n"); exit(1); }
+        size_t avi = 0;
+        av[avi++] = bin_str;
+        for (size_t i = 0; i < exec_args.len; ++i)
+            av[avi++] = exec_args.data[i];
+        av[avi++] = NULL;
+        execve(bin_str, (char *const *)av, environ);
         fprintf(stderr, "Failed to exec: %s: %s\n",
                 bin_str, strerror(errno));
         exit(1);
     }
 
-    // ── Non-pyinstaller, non-elf32: userland execve with interpreter ──
-    bytearr_free(&elf_bytes);
+    // Normal binary -> execve via interpreter with argv[0]=interpreter, argv[1]=bin_str, ...
+    {
+        const char **av = malloc((exec_args.len + 3) * sizeof(const char *));
+        if (!av) { fprintf(stderr, "Out of memory\n"); exit(1); }
+        size_t avi = 0;
+        av[avi++] = interpreter;
+        av[avi++] = bin_str;
+        for (size_t i = 0; i < exec_args.len; ++i)
+            av[avi++] = exec_args.data[i];
+        av[avi++] = NULL;
+        if (interpreter[0])
+            execve(interpreter, (char *const *)av, environ);
+        free(av);
+    }
 
+    // Fallback: userland execve (handles interpreter in-memory)
     sharun_userland_execve(bin_str, interpreter, &exec_args,
                            library_path, argv0_for_target);
 }
