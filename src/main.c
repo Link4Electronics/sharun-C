@@ -334,7 +334,7 @@ void sharun_gen_lib_path(const char *library_path, const char *lib_path_file) {
     g_glp_ctx.ndirs = 0;
     g_glp_ctx.dirs_cap = 0;
 
-    nftw(library_path, glp_callback, 64, FTW_PHYS);
+    nftw(library_path, glp_callback, 64, 0);
 
     size_t content_cap = 256;
     size_t content_len = 0;

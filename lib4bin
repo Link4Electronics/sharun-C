@@ -32,7 +32,6 @@ GIT_UV_RELEASE="https://github.com/astral-sh/uv/releases/latest/download/uv-${AR
 
 STRIP=${STRIP:=0}
 VERBOSE=${VERBOSE:=0}
-WITH_SHARUN=${WITH_SHARUN:=0}
 WITH_WRAPPE=${WITH_WRAPPE:=0}
 WRAPPE_CLVL=${WRAPPE_CLVL:=8}
 STRACE_MODE=${STRACE_MODE:=0}
@@ -106,8 +105,6 @@ usage() {
     -n, --not-one-dir        Separate directories for each executable (env: ONE_DIR=0)
     -s, --strip              Strip binaries and libraries (env: STRIP=1)
     -v, --verbose            Verbose mode (env: VERBOSE=1)
-    -w, --with-sharun        Pack sharun from PATH or env or download
-                                 (env: WITH_SHARUN=1, SHARUN=/path|URL, SHARUN_URL=URL)
     -o, --with-wrappe        Pack with wrappe from PATH or env or download
                                 (env: WITH_WRAPPE=1, WRAPPE=/path|URL, WRAPPE_URL=URL)
     -c, --wrappe-clvl 0-22   Specify the compression level for wrappe (env: WRAPPE_CLVL=0-22) (default: 8)
@@ -442,7 +439,6 @@ while [[ "$#" -gt 0 ]]; do
         -n|--not-one-dir) ONE_DIR=0; shift ;;
         -k|--with-hooks) WITH_HOOKS=1; shift ;;
         -e|--strace-mode) STRACE_MODE=1; shift ;;
-        -w|--with-sharun) WITH_SHARUN=1; shift ;;
         -o|--with-wrappe) WITH_WRAPPE=1; shift ;;
         -y|--with-python) WITH_PYTHON=1; shift ;;
         -pi|--python-pip) PYTHON_LEAVE_PIP=1; shift ;;
@@ -484,9 +480,6 @@ fi
     WRAPPE_CLVL=8
 [ -d "$WRAPPE_DIR" ] && \
 WRAPPE_DIR="$(readlink -f "$WRAPPE_DIR")"
-[ "$WITH_WRAPPE" == 1 ] && \
-    WITH_SHARUN=1
-
 [[ -n "$PYTHON_PKG" ]] && WITH_PYTHON=1
 [[ "$PYTHON_VER" =~ ^[0-9]+\.[0-9]+$ ]] && \
     WITH_PYTHON=1||unset PYTHON_VER
@@ -693,7 +686,6 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                         fi
                         IS_SHARUN="$(find "$binary_src_pth" -xdev -samefile "${dst_dir}/sharun" 2>/dev/null)"
                         info_msg "$YELLOW[ $binary_number ]: $BLUE[$binary_name] ${GREEN}..."
-                        with_sharun=${WITH_SHARUN:=0}
                         create_links=0
                         patch_interpreter=${PATCH_INTERPRETER:=0}
                         if ([ -n "$IS_EXECUTABLE" ] || is_so)
@@ -704,7 +696,6 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                 if [[ -n "$LIBS" && -z "$IS_SCRIPT" && -z "$IS_STATIC" ]]
                                     then
                                         create_links=1
-                                        [ ! -x "${dst_dir}/sharun" ] && with_sharun=1
                                     else
                                         bin_dir_pth="$sharun_bin_dir_pth"
                                 fi
@@ -713,7 +704,7 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                     then
                                         if [[ "$binary_real_name" != 'sharun' && -z "$IS_SHARUN" ]]
                                             then
-                                                if [[ "$with_sharun" == 1 && ! -x "${dst_dir}/sharun" ]]
+                                                if [ ! -x "${dst_dir}/sharun" ]
                                                     then
                                                         TMP_SHARUN="${TMPDIR}/sharun-${ARCH}"
                                                         SHARUN="${SHARUN:="$(readlink -f "$(which_exe sharun)")"}"
@@ -832,11 +823,11 @@ if [[  ! -d "$WRAPPE_DIR" || "$WITH_PYTHON" == 1 ]]
                                                     then
                                                         lib_src_name="$(basename "$lib_src_pth")"
                                                         [ -n "$IS_ELF32" ] && [ "$HOST_BITS" = 64 ] && lib_dir="lib32" || \
-                                                        [ "$HOST_BITS" != 32 ] && grep -qE '/lib32|/i386-linux-gnu|/arm-linux-gnu'<<<"$lib_src_dirname_pth" && lib_dir="lib32" || \
+                                                        grep -qE '/lib32|/i386-linux-gnu|/arm-linux-gnu'<<<"$lib_src_dirname_pth" && lib_dir="lib32" || \
                                                         lib_dir="lib"
-                                                        try_mkdir "${dst_dir}/shared/${lib_dir}"
-                                                        if [ ! -d "${dst_dir}/${lib_dir}" ] && [ ! -L "${dst_dir}/${lib_dir}" ]; then
-                                                            (try_cd "$dst_dir"; try_ln shared/${lib_dir} ${lib_dir})||exit 1
+                                                        try_mkdir "${dst_dir}/${lib_dir}"
+                                                        if [ ! -d "${dst_dir}/shared/${lib_dir}" ] && [ ! -L "${dst_dir}/shared/${lib_dir}" ]; then
+                                                            (try_cd "$dst_dir/shared"; try_ln ../${lib_dir} ${lib_dir})||exit 1
                                                         fi
                                                         lib_dst_dir_pth="$(get_lib_dst_dir_pth "$dst_dir_pth" "$lib_dir" "$lib_src_dirname_pth")"
                                                         [ -n "$lib_src_real_name" ] && \
@@ -1218,31 +1209,12 @@ if [ "$WITH_WRAPPE" == 1 ]
         fi
 fi
 
-_gen_lib_path() {
-    for _lib_dir in lib lib32; do
-        _lib_dir="${1}/${_lib_dir}"
-        if [ -d "$_lib_dir" ]; then
-            _libs="$(find_so "$_lib_dir/")"
-            if [ -n "$_libs" ]; then
-                info_msg "$YELLOW[ GEN LIB PATH ]: $BLUE[${_lib_dir}/lib.path]"
-                sed "s|${_lib_dir}|+|g"<<<"$(xargs -I {} dirname "{}"<<<"$_libs"|\
-                    sort -u)"|grep -v '+/lib-dynload' > "${_lib_dir}/lib.path"||exit 1
-            fi
-        fi
-    done
-}
-
 for dst_dir in "${!DST_DIRS[@]}"
     do
-        _gen_lib_path "$dst_dir"
         src_dir="${dst_dir%/shared}"
         if [[ "$WITH_WRAPPE" == 1 && -x "$src_dir/sharun" ]]
             then
-                src_bins=(
-                    $(find_exe "$src_dir/bin/" \
-                        -not -name 'xdg-open' -not -name 'gio-launch-desktop' \
-                    -printf "%f\n")
-                )
+                src_bins=($(find_exe "$src_dir/bin/" -printf "%f\n"))
                 if [ -n "$src_bins" ]
                     then
                         if [ "${#src_bins[@]}" == 1 ]
